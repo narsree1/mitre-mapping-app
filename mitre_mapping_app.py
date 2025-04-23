@@ -5,11 +5,11 @@ from sentence_transformers import SentenceTransformer, util
 import torch
 import json
 import datetime
+import base64
 import uuid
-import plotly.graph_objects as go
-from mitreattack.attack.framework import Framework
+import io
+import matplotlib.pyplot as plt
 import numpy as np
-import os
 
 st.set_page_config(layout="wide")
 
@@ -34,6 +34,7 @@ def load_mitre_data():
         response = requests.get("https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack.json")
         attack_data = response.json()
         techniques = []
+        tactics = []
         tactic_mapping = {}  # To store tactic ID to name mapping
 
         # Extract tactics (kill chain phases)
@@ -42,6 +43,10 @@ def load_mitre_data():
                 tactic_id = obj.get('external_references', [{}])[0].get('external_id', 'N/A')
                 tactic_name = obj.get('name', 'N/A')
                 tactic_mapping[tactic_name] = tactic_id
+                tactics.append({
+                    'id': tactic_id,
+                    'name': tactic_name
+                })
 
         for obj in attack_data['objects']:
             if obj.get('type') == 'attack-pattern':
@@ -59,10 +64,10 @@ def load_mitre_data():
                     'tactics_list': [phase['phase_name'] for phase in obj.get('kill_chain_phases', [])],
                     'url': obj.get('external_references', [{}])[0].get('url', '')
                 })
-        return techniques, tactic_mapping
+        return techniques, tactics, tactic_mapping
     except Exception as e:
         st.error(f"Error loading MITRE data: {e}")
-        return [], {}
+        return [], [], {}
 
 # Pre-compute embeddings - Fixed to use underscore prefix for unhashable parameters
 @st.cache_resource
@@ -92,82 +97,7 @@ def map_to_mitre(description, model, mitre_techniques, mitre_embeddings):
         st.error(f"Error mapping to MITRE: {e}")
         return "Error", "Error", "Error", []
 
-# Create MITRE ATT&CK heatmap using mitreattack-python and plotly
-def generate_attack_heatmap(techniques_count, tactic_mapping):
-    try:
-        # Initialize MITRE ATT&CK framework
-        attack = Framework()
-        
-        # Get all tactics and techniques
-        enterprise_tactics = attack.get_tactics("enterprise")
-        tactic_names = [tactic.name for tactic in enterprise_tactics]
-        tactic_ids = [tactic.id for tactic in enterprise_tactics]
-        
-        # Create a matrix for the heatmap
-        technique_matrix = []
-        technique_labels = []
-        max_count = max(techniques_count.values()) if techniques_count else 1
-        
-        # Get all techniques by tactic
-        for tactic in enterprise_tactics:
-            tactic_techniques = attack.get_techniques_by_tactic(tactic)
-            
-            # Get counts for techniques in this tactic
-            for technique in tactic_techniques:
-                if technique.id in techniques_count:
-                    technique_matrix.append({
-                        'tactic': tactic.name,
-                        'technique': f"{technique.id}: {technique.name}",
-                        'count': techniques_count[technique.id],
-                        'normalized_count': techniques_count[technique.id] / max_count
-                    })
-                    technique_labels.append(f"{technique.id}: {technique.name}")
-        
-        # Create the heatmap using plotly
-        df_heatmap = pd.DataFrame(technique_matrix)
-        
-        # Create pivot table for the heatmap
-        heatmap_data = pd.pivot_table(
-            df_heatmap, 
-            values='normalized_count', 
-            index=['technique'], 
-            columns=['tactic'], 
-            fill_value=0
-        )
-        
-        # Create the plot
-        fig = go.Figure(data=go.Heatmap(
-            z=heatmap_data.values,
-            x=heatmap_data.columns,
-            y=heatmap_data.index,
-            colorscale='Blues',
-            showscale=True,
-            colorbar=dict(
-                title='Normalized Frequency',
-            ),
-            hoverongaps=False,
-            hovertemplate=
-            "<b>Technique:</b> %{y}<br>" +
-            "<b>Tactic:</b> %{x}<br>" +
-            "<b>Value:</b> %{z}<br>" +
-            "<extra></extra>"
-        ))
-        
-        fig.update_layout(
-            title='MITRE ATT&CK Technique Coverage Heatmap',
-            xaxis=dict(title='Tactics'),
-            yaxis=dict(title='Techniques'),
-            height=800,
-            width=1200,
-            margin=dict(l=50, r=50, t=100, b=100),
-        )
-        
-        return fig
-    except Exception as e:
-        st.error(f"Error creating ATT&CK heatmap: {e}")
-        return None
-
-# Create Navigator Layer (will be used for JSON download option)
+# Create Navigator Layer
 def create_navigator_layer(techniques_count):
     try:
         # Initialize techniques data with proper format for Navigator
@@ -231,6 +161,167 @@ def create_navigator_layer(techniques_count):
         st.error(f"Error creating Navigator layer: {e}")
         return "{}", ""
 
+# Create a simple heatmap using matplotlib
+def create_simple_heatmap(techniques_count, tactics, mitre_techniques):
+    try:
+        # Create a mapping from technique ID to tactics
+        tech_to_tactics = {}
+        for tech in mitre_techniques:
+            tech_to_tactics[tech['id']] = tech['tactics_list']
+        
+        # Get all unique tactic names
+        all_tactics = [tactic['name'] for tactic in tactics]
+        
+        # Create a matrix for the heatmap
+        matrix = np.zeros((len(techniques_count), len(all_tactics)))
+        tech_ids = list(techniques_count.keys())
+        
+        # Fill the matrix with technique counts
+        for i, tech_id in enumerate(tech_ids):
+            for tech in mitre_techniques:
+                if tech['id'] == tech_id:
+                    for tactic_name in tech['tactics_list']:
+                        if tactic_name in all_tactics:
+                            j = all_tactics.index(tactic_name)
+                            matrix[i, j] = techniques_count[tech_id]
+        
+        # Create labels for techniques
+        tech_labels = []
+        for tech_id in tech_ids:
+            for tech in mitre_techniques:
+                if tech['id'] == tech_id:
+                    tech_labels.append(f"{tech_id}: {tech['name']}")
+                    break
+            else:
+                tech_labels.append(tech_id)
+        
+        # Create the figure
+        fig, ax = plt.subplots(figsize=(12, len(tech_ids) * 0.4))
+        im = ax.imshow(matrix, cmap='Blues')
+        
+        # Set ticks and labels
+        ax.set_xticks(np.arange(len(all_tactics)))
+        ax.set_yticks(np.arange(len(tech_labels)))
+        ax.set_xticklabels(all_tactics, rotation=45, ha='right')
+        ax.set_yticklabels(tech_labels)
+        
+        # Add a colorbar
+        cbar = ax.figure.colorbar(im, ax=ax)
+        cbar.ax.set_ylabel("Technique Count", rotation=-90, va="bottom")
+        
+        # Set title and adjust layout
+        ax.set_title("MITRE ATT&CK Technique Coverage")
+        plt.tight_layout()
+        
+        # Convert to image to display in Streamlit
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight')
+        buf.seek(0)
+        
+        return buf
+    except Exception as e:
+        st.error(f"Error creating heatmap: {str(e)}")
+        return None
+
+# Create an HTML representation of the ATT&CK matrix
+def create_html_matrix(techniques_count, tactics, mitre_techniques):
+    try:
+        # Create a mapping from technique ID to technique info
+        tech_info = {}
+        for tech in mitre_techniques:
+            tech_info[tech['id']] = {
+                'name': tech['name'],
+                'tactics': tech['tactics_list']
+            }
+        
+        # Get all unique tactic names in the correct order
+        tactic_names = [tactic['name'] for tactic in tactics]
+        
+        # Create an HTML table for the matrix
+        html = """
+        <style>
+        .matrix-table {
+            border-collapse: collapse;
+            width: 100%;
+            font-family: Arial, sans-serif;
+        }
+        .matrix-table th, .matrix-table td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: center;
+        }
+        .matrix-table th {
+            background-color: #f2f2f2;
+            position: sticky;
+            top: 0;
+        }
+        .technique-cell {
+            text-align: left;
+            font-weight: bold;
+        }
+        .count-cell {
+            background-color: #e6f2ff;
+        }
+        .count-cell-high {
+            background-color: #0d4a90;
+            color: white;
+        }
+        .count-cell-medium {
+            background-color: #66b1ff;
+            color: white;
+        }
+        .count-cell-low {
+            background-color: #cce5ff;
+        }
+        </style>
+        <table class="matrix-table">
+            <tr>
+                <th>Technique</th>
+        """
+        
+        # Add tactic headers
+        for tactic in tactic_names:
+            html += f"<th>{tactic}</th>"
+        
+        html += "</tr>"
+        
+        # Maximum count for color scaling
+        max_count = max(techniques_count.values()) if techniques_count else 1
+        
+        # Add technique rows
+        for tech_id, count in techniques_count.items():
+            if tech_id in tech_info:
+                tech_name = tech_info[tech_id]['name']
+                tactics_for_tech = tech_info[tech_id]['tactics']
+                
+                html += f"""
+                <tr>
+                    <td class="technique-cell">{tech_id}: {tech_name}</td>
+                """
+                
+                for tactic in tactic_names:
+                    if tactic in tactics_for_tech:
+                        # Determine cell color based on count
+                        color_class = "count-cell"
+                        if count > max_count * 0.7:
+                            color_class = "count-cell-high"
+                        elif count > max_count * 0.3:
+                            color_class = "count-cell-medium"
+                        elif count > 0:
+                            color_class = "count-cell-low"
+                        
+                        html += f'<td class="{color_class}">{count}</td>'
+                    else:
+                        html += '<td></td>'
+                
+                html += "</tr>"
+        
+        html += "</table>"
+        return html
+    except Exception as e:
+        st.error(f"Error creating HTML matrix: {str(e)}")
+        return f"<p>Error creating matrix: {str(e)}</p>"
+
 # Streamlit UI
 def main():
     st.title("MITRE ATT&CK Mapping Tool for Security Use Cases")
@@ -242,7 +333,7 @@ def main():
         return
 
     # Load MITRE data
-    mitre_techniques, tactic_mapping = load_mitre_data()
+    mitre_techniques, tactics, tactic_mapping = load_mitre_data()
     if not mitre_techniques:
         st.error("Failed to load MITRE ATT&CK data. Please check your internet connection.")
         return
@@ -269,15 +360,14 @@ def main():
                 st.error("Your CSV must contain a 'Description' column. Please check your file.")
                 return
             
-            # Process the data without showing the raw CSV
-            tactics, techniques, references, all_tactics_lists = [], [], [], []
+            tactics_list, techniques_list, references, all_tactics_lists = [], [], [], []
             techniques_count = {}  # For Navigator layer
 
             with st.spinner("Mapping use cases to MITRE ATT&CK..."):
                 for _, row in df.iterrows():
                     tactic, technique, reference, tactics_list = map_to_mitre(row[required_col], model, mitre_techniques, mitre_embeddings)
-                    tactics.append(tactic)
-                    techniques.append(technique)
+                    tactics_list.append(tactic)
+                    techniques_list.append(technique)
                     references.append(reference)
                     all_tactics_lists.append(tactics_list)
                     
@@ -289,8 +379,8 @@ def main():
                         else:
                             techniques_count[tech_id] = 1
 
-            df['Mapped MITRE Tactic(s)'] = tactics
-            df['Mapped MITRE Technique(s)/Sub-techniques'] = techniques
+            df['Mapped MITRE Tactic(s)'] = tactics_list
+            df['Mapped MITRE Technique(s)/Sub-techniques'] = techniques_list
             df['Reference Resource(s)'] = references
 
             st.success("Mapping complete!")
@@ -305,14 +395,20 @@ def main():
             st.markdown("---")
             st.subheader("MITRE ATT&CK Navigator View")
             
-            # Generate and display the in-app ATT&CK heatmap
-            heatmap_fig = generate_attack_heatmap(techniques_count, tactic_mapping)
-            if heatmap_fig:
-                st.plotly_chart(heatmap_fig, use_container_width=True)
+            # Create and display HTML matrix
+            st.write("### Technique Coverage Matrix")
+            html_matrix = create_html_matrix(techniques_count, tactics, mitre_techniques)
+            st.components.v1.html(html_matrix, height=len(techniques_count) * 50 + 100)
             
-            # Also provide option to download Navigator layer JSON
+            # Create and display simple heatmap as fallback
+            st.write("### Technique Heatmap")
+            heatmap_buf = create_simple_heatmap(techniques_count, tactics, mitre_techniques)
+            if heatmap_buf:
+                st.image(heatmap_buf, use_column_width=True)
+            
+            # Provide download option for Navigator
             navigator_layer, _ = create_navigator_layer(techniques_count)
-            with st.expander("Download Navigator Layer for External Use"):
+            with st.expander("Download Navigator Layer"):
                 st.download_button(
                     "Download Navigator Layer JSON", 
                     navigator_layer, 
@@ -323,6 +419,7 @@ def main():
             
         except Exception as e:
             st.error(f"An error occurred while processing the CSV: {str(e)}")
+            st.error(f"Error details: {str(e.__class__.__name__)}")
 
 if __name__ == '__main__':
     main()

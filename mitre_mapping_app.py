@@ -216,7 +216,7 @@ def main():
                 st.code(navigator_layer, language="json")
 
         except Exception as e:
-            st.error(f"An error occurred while processing the CSV: {str(e)}")
+            st.exception(e)
 
 if __name__ == '__main__':
     main()

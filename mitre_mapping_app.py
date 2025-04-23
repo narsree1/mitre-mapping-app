@@ -205,13 +205,29 @@ def main():
             st.subheader("MITRE ATT&CK Navigator Layer")
 
             navigator_layer, layer_id = create_navigator_layer(techniques_count)
+            
+            # Provide direct download for navigator layer JSON
+            st.download_button(
+                label="Download Navigator Layer JSON",
+                data=navigator_layer,
+                file_name="navigator_layer.json",
+                mime="application/json"
+            )
 
-            st.markdown("### MITRE ATT&CK Navigator Embedded View")
+            st.markdown("### How to View in MITRE ATT&CK Navigator")
             st.markdown("""
-            1. Copy the JSON below and paste it into [this site](https://mitre-attack.github.io/attack-navigator/)
-            2. Click `Open Existing Layer → Upload File` and upload the downloaded `navigator_layer.json`
-            3. (Optional) Host this JSON on a GitHub Gist and use `Load Layer from URL` to view it online
+            **Option 1: Upload the downloaded file**
+            1. Download the Navigator Layer JSON using the button above
+            2. Visit the [MITRE ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/)
+            3. Click "Open Existing Layer" and then "Upload from Local"
+            4. Select the downloaded `navigator_layer.json` file
+            
+            **Option 2: Copy and paste JSON**
+            1. Visit the [MITRE ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/)
+            2. Click "Open Existing Layer" and then "Upload from Clipboard"
+            3. Copy the JSON below and paste it into the text area
             """)
+            
             with st.expander("View Layer JSON"):
                 st.code(navigator_layer, language="json")
 

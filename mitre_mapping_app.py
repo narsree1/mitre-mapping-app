@@ -56,15 +56,15 @@ def load_mitre_data():
         st.error(f"Error loading MITRE data: {e}")
         return [], {}
 
-# Pre-compute embeddings
+# Pre-compute embeddings - Fixed to use underscore prefix for unhashable parameters
 @st.cache_resource
-def get_mitre_embeddings(model, techniques):
-    if model is None or not techniques:
+def get_mitre_embeddings(_model, techniques):
+    if _model is None or not techniques:
         return None
     
     try:
         descriptions = [tech['description'] for tech in techniques]
-        return model.encode(descriptions, convert_to_tensor=True)
+        return _model.encode(descriptions, convert_to_tensor=True)
     except Exception as e:
         st.error(f"Error computing embeddings: {e}")
         return None
@@ -181,7 +181,7 @@ def main():
         st.error("Failed to load MITRE ATT&CK data. Please check your internet connection.")
         return
 
-    # Get MITRE embeddings
+    # Get MITRE embeddings - using the model object which can't be hashed
     mitre_embeddings = get_mitre_embeddings(model, mitre_techniques)
     if mitre_embeddings is None:
         st.error("Failed to compute MITRE embeddings. Please check the logs.")

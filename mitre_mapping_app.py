@@ -161,68 +161,6 @@ def create_navigator_layer(techniques_count):
         st.error(f"Error creating Navigator layer: {e}")
         return "{}", ""
 
-# Create a simple heatmap using matplotlib
-def create_simple_heatmap(techniques_count, tactics, mitre_techniques):
-    try:
-        # Create a mapping from technique ID to tactics
-        tech_to_tactics = {}
-        for tech in mitre_techniques:
-            tech_to_tactics[tech['id']] = tech['tactics_list']
-        
-        # Get all unique tactic names
-        all_tactics = [tactic['name'] for tactic in tactics]
-        
-        # Create a matrix for the heatmap
-        matrix = np.zeros((len(techniques_count), len(all_tactics)))
-        tech_ids = list(techniques_count.keys())
-        
-        # Fill the matrix with technique counts
-        for i, tech_id in enumerate(tech_ids):
-            for tech in mitre_techniques:
-                if tech['id'] == tech_id:
-                    for tactic_name in tech['tactics_list']:
-                        if tactic_name in all_tactics:
-                            j = all_tactics.index(tactic_name)
-                            matrix[i, j] = techniques_count[tech_id]
-        
-        # Create labels for techniques
-        tech_labels = []
-        for tech_id in tech_ids:
-            for tech in mitre_techniques:
-                if tech['id'] == tech_id:
-                    tech_labels.append(f"{tech_id}: {tech['name']}")
-                    break
-            else:
-                tech_labels.append(tech_id)
-        
-        # Create the figure
-        fig, ax = plt.subplots(figsize=(12, len(tech_ids) * 0.4))
-        im = ax.imshow(matrix, cmap='Blues')
-        
-        # Set ticks and labels
-        ax.set_xticks(np.arange(len(all_tactics)))
-        ax.set_yticks(np.arange(len(tech_labels)))
-        ax.set_xticklabels(all_tactics, rotation=45, ha='right')
-        ax.set_yticklabels(tech_labels)
-        
-        # Add a colorbar
-        cbar = ax.figure.colorbar(im, ax=ax)
-        cbar.ax.set_ylabel("Technique Count", rotation=-90, va="bottom")
-        
-        # Set title and adjust layout
-        ax.set_title("MITRE ATT&CK Technique Coverage")
-        plt.tight_layout()
-        
-        # Convert to image to display in Streamlit
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight')
-        buf.seek(0)
-        
-        return buf
-    except Exception as e:
-        st.error(f"Error creating heatmap: {str(e)}")
-        return None
-
 # Create an HTML representation of the ATT&CK matrix
 def create_html_matrix(techniques_count, tactics, mitre_techniques):
     try:
@@ -322,6 +260,68 @@ def create_html_matrix(techniques_count, tactics, mitre_techniques):
         st.error(f"Error creating HTML matrix: {str(e)}")
         return f"<p>Error creating matrix: {str(e)}</p>"
 
+# Create a simple heatmap using matplotlib
+def create_simple_heatmap(techniques_count, tactics, mitre_techniques):
+    try:
+        # Create a mapping from technique ID to tactics
+        tech_to_tactics = {}
+        for tech in mitre_techniques:
+            tech_to_tactics[tech['id']] = tech['tactics_list']
+        
+        # Get all unique tactic names
+        all_tactics = [tactic['name'] for tactic in tactics]
+        
+        # Create a matrix for the heatmap
+        matrix = np.zeros((len(techniques_count), len(all_tactics)))
+        tech_ids = list(techniques_count.keys())
+        
+        # Fill the matrix with technique counts
+        for i, tech_id in enumerate(tech_ids):
+            for tech in mitre_techniques:
+                if tech['id'] == tech_id:
+                    for tactic_name in tech['tactics_list']:
+                        if tactic_name in all_tactics:
+                            j = all_tactics.index(tactic_name)
+                            matrix[i, j] = techniques_count[tech_id]
+        
+        # Create labels for techniques
+        tech_labels = []
+        for tech_id in tech_ids:
+            for tech in mitre_techniques:
+                if tech['id'] == tech_id:
+                    tech_labels.append(f"{tech_id}: {tech['name']}")
+                    break
+            else:
+                tech_labels.append(tech_id)
+        
+        # Create the figure
+        fig, ax = plt.subplots(figsize=(12, len(tech_ids) * 0.4))
+        im = ax.imshow(matrix, cmap='Blues')
+        
+        # Set ticks and labels
+        ax.set_xticks(np.arange(len(all_tactics)))
+        ax.set_yticks(np.arange(len(tech_labels)))
+        ax.set_xticklabels(all_tactics, rotation=45, ha='right')
+        ax.set_yticklabels(tech_labels)
+        
+        # Add a colorbar
+        cbar = ax.figure.colorbar(im, ax=ax)
+        cbar.ax.set_ylabel("Technique Count", rotation=-90, va="bottom")
+        
+        # Set title and adjust layout
+        ax.set_title("MITRE ATT&CK Technique Coverage")
+        plt.tight_layout()
+        
+        # Convert to image to display in Streamlit
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight')
+        buf.seek(0)
+        
+        return buf
+    except Exception as e:
+        st.error(f"Error creating heatmap: {str(e)}")
+        return None
+
 # Streamlit UI
 def main():
     st.title("MITRE ATT&CK Mapping Tool for Security Use Cases")
@@ -348,7 +348,17 @@ def main():
 
     if uploaded_file is not None:
         try:
-            df = pd.read_csv(uploaded_file)
+            # More robust CSV parsing with explicit parameters
+            df = pd.read_csv(
+                uploaded_file,
+                quotechar='"',  # Specify quote character
+                skipinitialspace=True,  # Skip spaces after delimiter
+                engine='python'  # Use python parsing engine for better handling of quoted fields
+            )
+            
+            # Debug information (can be removed in production)
+            st.debug(f"CSV loaded successfully. Columns: {df.columns.tolist()}")
+            st.debug(f"Number of rows: {len(df)}")
             
             # Check if required column exists
             required_col = None
@@ -365,7 +375,8 @@ def main():
 
             with st.spinner("Mapping use cases to MITRE ATT&CK..."):
                 for _, row in df.iterrows():
-                    tactic, technique, reference, tactics_list = map_to_mitre(row[required_col], model, mitre_techniques, mitre_embeddings)
+                    description = row[required_col]
+                    tactic, technique, reference, tactics_list = map_to_mitre(description, model, mitre_techniques, mitre_embeddings)
                     tactics_list.append(tactic)
                     techniques_list.append(technique)
                     references.append(reference)
@@ -379,6 +390,7 @@ def main():
                         else:
                             techniques_count[tech_id] = 1
 
+            # Add mapped MITRE data to the dataframe
             df['Mapped MITRE Tactic(s)'] = tactics_list
             df['Mapped MITRE Technique(s)/Sub-techniques'] = techniques_list
             df['Reference Resource(s)'] = references
@@ -400,7 +412,7 @@ def main():
             html_matrix = create_html_matrix(techniques_count, tactics, mitre_techniques)
             st.components.v1.html(html_matrix, height=len(techniques_count) * 50 + 100)
             
-            # Create and display simple heatmap as fallback
+            # Create and display simple heatmap
             st.write("### Technique Heatmap")
             heatmap_buf = create_simple_heatmap(techniques_count, tactics, mitre_techniques)
             if heatmap_buf:
@@ -419,7 +431,7 @@ def main():
             
         except Exception as e:
             st.error(f"An error occurred while processing the CSV: {str(e)}")
-            st.error(f"Error details: {str(e.__class__.__name__)}")
+            st.exception(e)  # This will show the full traceback in the app
 
 if __name__ == '__main__':
     main()

@@ -216,16 +216,16 @@ def main():
 
             st.markdown("### How to View in MITRE ATT&CK Navigator")
             st.markdown("""
-            **Option 1: Upload the downloaded file**
+            **Steps: Upload the downloaded file**
             1. Download the Navigator Layer JSON using the button above
             2. Visit the [MITRE ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/)
             3. Click "Open Existing Layer" and then "Upload from Local"
             4. Select the downloaded `navigator_layer.json` file
             
-            **Option 2: Copy and paste JSON**
-            1. Visit the [MITRE ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/)
-            2. Click "Open Existing Layer" and then "Upload from Clipboard"
-            3. Copy the JSON below and paste it into the text area
+            #**Option 2: Copy and paste JSON**
+            #1. Visit the [MITRE ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/)
+            #2. Click "Open Existing Layer" and then "Upload from Clipboard"
+            #3. Copy the JSON below and paste it into the text area
             """)
             
             with st.expander("View Layer JSON"):

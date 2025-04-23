@@ -2,9 +2,6 @@ import pandas as pd
 import streamlit as st
 import requests
 from sentence_transformers import SentenceTransformer, util
-import matplotlib.pyplot as plt
-import seaborn as sns
-import io
 import torch
 import json
 import datetime
@@ -142,29 +139,6 @@ def create_navigator_layer(techniques_count, tactic_mapping):
         st.error(f"Error creating Navigator layer: {e}")
         return "{}"
 
-# Traditional heatmap generation (as backup)
-def generate_traditional_heatmap(tactics):
-    try:
-        if not tactics or all(t == "N/A" for t in tactics):
-            st.warning("No valid tactics to display in heatmap")
-            return
-            
-        heatmap_data = pd.DataFrame(tactics, columns=['Tactic'])
-        tactic_counts = heatmap_data['Tactic'].value_counts().reset_index()
-        tactic_counts.columns = ['Tactic', 'Count']
-        
-        plt.figure(figsize=(12, 6))
-        sns.barplot(data=tactic_counts, x='Tactic', y='Count', palette='viridis')
-        plt.xticks(rotation=45)
-        plt.title("MITRE Tactic Distribution")
-        buf = io.BytesIO()
-        plt.tight_layout()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        st.image(buf)
-    except Exception as e:
-        st.error(f"Error generating traditional heatmap: {e}")
-
 # Streamlit UI
 def main():
     st.title("MITRE ATT&CK Mapping Tool for Security Use Cases")
@@ -259,11 +233,6 @@ def main():
             # Show sample of the JSON (collapsible)
             with st.expander("Preview Navigator Layer JSON"):
                 st.code(navigator_layer, language="json")
-            
-            # Traditional visualization as backup
-            st.markdown("---")
-            st.subheader("MITRE Tactic Distribution (Traditional View)")
-            generate_traditional_heatmap(tactics)
             
         except Exception as e:
             st.error(f"An error occurred while processing the CSV: {str(e)}")

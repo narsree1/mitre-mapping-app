@@ -221,7 +221,7 @@ def main():
             2. Visit the [MITRE ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/)
             3. Click "Open Existing Layer" and then "Upload from Local"
             4. Select the downloaded `navigator_layer.json` file
-            )
+            """)
             
             with st.expander("View Layer JSON"):
                 st.code(navigator_layer, language="json")

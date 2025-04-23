@@ -5,8 +5,11 @@ from sentence_transformers import SentenceTransformer, util
 import torch
 import json
 import datetime
-import base64
 import uuid
+import plotly.graph_objects as go
+from mitreattack.attack.framework import Framework
+import numpy as np
+import os
 
 st.set_page_config(layout="wide")
 
@@ -89,7 +92,82 @@ def map_to_mitre(description, model, mitre_techniques, mitre_embeddings):
         st.error(f"Error mapping to MITRE: {e}")
         return "Error", "Error", "Error", []
 
-# Create Navigator Layer
+# Create MITRE ATT&CK heatmap using mitreattack-python and plotly
+def generate_attack_heatmap(techniques_count, tactic_mapping):
+    try:
+        # Initialize MITRE ATT&CK framework
+        attack = Framework()
+        
+        # Get all tactics and techniques
+        enterprise_tactics = attack.get_tactics("enterprise")
+        tactic_names = [tactic.name for tactic in enterprise_tactics]
+        tactic_ids = [tactic.id for tactic in enterprise_tactics]
+        
+        # Create a matrix for the heatmap
+        technique_matrix = []
+        technique_labels = []
+        max_count = max(techniques_count.values()) if techniques_count else 1
+        
+        # Get all techniques by tactic
+        for tactic in enterprise_tactics:
+            tactic_techniques = attack.get_techniques_by_tactic(tactic)
+            
+            # Get counts for techniques in this tactic
+            for technique in tactic_techniques:
+                if technique.id in techniques_count:
+                    technique_matrix.append({
+                        'tactic': tactic.name,
+                        'technique': f"{technique.id}: {technique.name}",
+                        'count': techniques_count[technique.id],
+                        'normalized_count': techniques_count[technique.id] / max_count
+                    })
+                    technique_labels.append(f"{technique.id}: {technique.name}")
+        
+        # Create the heatmap using plotly
+        df_heatmap = pd.DataFrame(technique_matrix)
+        
+        # Create pivot table for the heatmap
+        heatmap_data = pd.pivot_table(
+            df_heatmap, 
+            values='normalized_count', 
+            index=['technique'], 
+            columns=['tactic'], 
+            fill_value=0
+        )
+        
+        # Create the plot
+        fig = go.Figure(data=go.Heatmap(
+            z=heatmap_data.values,
+            x=heatmap_data.columns,
+            y=heatmap_data.index,
+            colorscale='Blues',
+            showscale=True,
+            colorbar=dict(
+                title='Normalized Frequency',
+            ),
+            hoverongaps=False,
+            hovertemplate=
+            "<b>Technique:</b> %{y}<br>" +
+            "<b>Tactic:</b> %{x}<br>" +
+            "<b>Value:</b> %{z}<br>" +
+            "<extra></extra>"
+        ))
+        
+        fig.update_layout(
+            title='MITRE ATT&CK Technique Coverage Heatmap',
+            xaxis=dict(title='Tactics'),
+            yaxis=dict(title='Techniques'),
+            height=800,
+            width=1200,
+            margin=dict(l=50, r=50, t=100, b=100),
+        )
+        
+        return fig
+    except Exception as e:
+        st.error(f"Error creating ATT&CK heatmap: {e}")
+        return None
+
+# Create Navigator Layer (will be used for JSON download option)
 def create_navigator_layer(techniques_count):
     try:
         # Initialize techniques data with proper format for Navigator
@@ -181,10 +259,6 @@ def main():
         try:
             df = pd.read_csv(uploaded_file)
             
-            # Display the uploaded CSV structure
-            st.subheader("CSV Structure")
-            st.dataframe(df.head())
-            
             # Check if required column exists
             required_col = None
             if 'Description' in df.columns:
@@ -195,6 +269,7 @@ def main():
                 st.error("Your CSV must contain a 'Description' column. Please check your file.")
                 return
             
+            # Process the data without showing the raw CSV
             tactics, techniques, references, all_tactics_lists = [], [], [], []
             techniques_count = {}  # For Navigator layer
 
@@ -219,50 +294,32 @@ def main():
             df['Reference Resource(s)'] = references
 
             st.success("Mapping complete!")
+            
+            # Show only the final mapped view
+            st.subheader("Mapped Security Use Cases")
             st.dataframe(df)
 
             csv = df.to_csv(index=False).encode('utf-8')
             st.download_button("Download Results as CSV", csv, "mitre_mapped_output.csv", "text/csv")
 
             st.markdown("---")
-            st.subheader("MITRE ATT&CK Navigator Layer")
+            st.subheader("MITRE ATT&CK Navigator View")
             
-            # Create Navigator layer
-            navigator_layer, layer_id = create_navigator_layer(techniques_count)
+            # Generate and display the in-app ATT&CK heatmap
+            heatmap_fig = generate_attack_heatmap(techniques_count, tactic_mapping)
+            if heatmap_fig:
+                st.plotly_chart(heatmap_fig, use_container_width=True)
             
-            col1, col2 = st.columns(2)
-            
-            # Option 1: Download as file
-            with col1:
-                st.markdown("### Option 1: Download and Load File")
-                b64 = base64.b64encode(navigator_layer.encode()).decode()
-                href = f'<a href="data:application/json;base64,{b64}" download="navigator_layer.json">Download Navigator Layer File</a>'
-                st.markdown(href, unsafe_allow_html=True)
-                st.markdown("Then upload file to [ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/)")
-            
-            # Option 2: Direct URL loading (this would require server storage but we simulate it here)
-            with col2:
-                st.markdown("### Option 2: Use Direct URL")
-                st.markdown("""
-                1. Copy this JSON code
-                2. Go to [MITRE ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/)
-                3. Click "Load from URL"
-                4. Paste into a JSON hosting service or GitHub Gist and use that URL
-                """)
-            
-            # Show the JSON for those who want to use it directly
-            with st.expander("View Navigator Layer JSON"):
-                st.code(navigator_layer, language="json")
-            
-            # Display screenshot of expected Navigator view
-            st.markdown("---")
-            st.subheader("Expected Navigator View")
-            st.markdown("""
-            After uploading to the Navigator, you should see a heatmap similar to this:
-            - The more frequently a technique appears in your mappings, the darker its color
-            - You can click on techniques to see more details
-            - The Navigator allows you to filter, search, and customize your view
-            """)
+            # Also provide option to download Navigator layer JSON
+            navigator_layer, _ = create_navigator_layer(techniques_count)
+            with st.expander("Download Navigator Layer for External Use"):
+                st.download_button(
+                    "Download Navigator Layer JSON", 
+                    navigator_layer, 
+                    "navigator_layer.json", 
+                    "application/json"
+                )
+                st.markdown("You can upload this JSON to the [MITRE ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/) for more advanced visualization.")
             
         except Exception as e:
             st.error(f"An error occurred while processing the CSV: {str(e)}")

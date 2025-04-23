@@ -6,6 +6,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import io
 import torch
+import json
+import datetime
+import base64
 
 st.set_page_config(layout="wide")
 
@@ -29,6 +32,14 @@ def load_mitre_data():
         response = requests.get("https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack.json")
         attack_data = response.json()
         techniques = []
+        tactic_mapping = {}  # To store tactic ID to name mapping
+
+        # Extract tactics (kill chain phases)
+        for obj in attack_data['objects']:
+            if obj.get('type') == 'x-mitre-tactic':
+                tactic_id = obj.get('external_references', [{}])[0].get('external_id', 'N/A')
+                tactic_name = obj.get('name', 'N/A')
+                tactic_mapping[tactic_name] = tactic_id
 
         for obj in attack_data['objects']:
             if obj.get('type') == 'attack-pattern':
@@ -37,12 +48,13 @@ def load_mitre_data():
                     'name': obj.get('name', 'N/A'),
                     'description': obj.get('description', ''),
                     'tactic': ', '.join([phase['phase_name'] for phase in obj.get('kill_chain_phases', [])]),
+                    'tactics_list': [phase['phase_name'] for phase in obj.get('kill_chain_phases', [])],
                     'url': obj.get('external_references', [{}])[0].get('url', '')
                 })
-        return techniques
+        return techniques, tactic_mapping
     except Exception as e:
         st.error(f"Error loading MITRE data: {e}")
-        return []
+        return [], {}
 
 # Pre-compute embeddings
 @st.cache_resource
@@ -60,20 +72,78 @@ def get_mitre_embeddings(model, techniques):
 # Map use case to MITRE using semantic similarity
 def map_to_mitre(description, model, mitre_techniques, mitre_embeddings):
     if model is None or mitre_embeddings is None:
-        return "N/A", "N/A", "N/A"
+        return "N/A", "N/A", "N/A", []
     
     try:
         query_embedding = model.encode(description, convert_to_tensor=True)
         scores = util.cos_sim(query_embedding, mitre_embeddings)[0]
         best_match_idx = scores.argmax().item()
         best_tech = mitre_techniques[best_match_idx]
-        return best_tech['tactic'], f"{best_tech['id']} - {best_tech['name']}", best_tech['url']
+        return best_tech['tactic'], f"{best_tech['id']} - {best_tech['name']}", best_tech['url'], best_tech['tactics_list']
     except Exception as e:
         st.error(f"Error mapping to MITRE: {e}")
-        return "Error", "Error", "Error"
+        return "Error", "Error", "Error", []
 
-# Heatmap generation
-def generate_heatmap(tactics):
+# Create Navigator Layer
+def create_navigator_layer(techniques_count, tactic_mapping):
+    try:
+        # Initialize all techniques with score 0
+        techniques_data = {}
+        for tech_id, count in techniques_count.items():
+            techniques_data[tech_id] = {
+                "score": count,
+                "enabled": True,
+                "metadata": [],
+                "links": [],
+                "showSubtechniques": False
+            }
+        
+        # Create layer file structure
+        current_date = datetime.datetime.now().strftime("%Y-%m-%d")
+        layer = {
+            "name": f"Security Use Cases Mapping - {current_date}",
+            "versions": {
+                "attack": "13",
+                "navigator": "4.8.1",
+                "layer": "4.4"
+            },
+            "domain": "enterprise-attack",
+            "description": f"Mapping of security use cases to MITRE ATT&CK techniques, generated on {current_date}",
+            "filters": {
+                "platforms": ["Linux", "macOS", "Windows", "Network", "PRE", "Containers", "Office 365", "SaaS", "IaaS", "Google Workspace", "Azure AD"]
+            },
+            "sorting": 0,
+            "layout": {
+                "layout": "side",
+                "aggregateFunction": "max",
+                "showID": True,
+                "showName": True,
+                "showAggregateScores": True,
+                "countUnscored": False
+            },
+            "hideDisabled": False,
+            "techniques": techniques_data,
+            "gradient": {
+                "colors": ["#ffffff", "#66b1ff", "#0d4a90"],
+                "minValue": 0,
+                "maxValue": max(techniques_count.values()) if techniques_count else 1
+            },
+            "legendItems": [],
+            "metadata": [],
+            "links": [],
+            "showTacticRowBackground": True,
+            "tacticRowBackground": "#dddddd",
+            "selectTechniquesAcrossTactics": True,
+            "selectSubtechniquesWithParent": False
+        }
+        
+        return json.dumps(layer, indent=2)
+    except Exception as e:
+        st.error(f"Error creating Navigator layer: {e}")
+        return "{}"
+
+# Traditional heatmap generation (as backup)
+def generate_traditional_heatmap(tactics):
     try:
         if not tactics or all(t == "N/A" for t in tactics):
             st.warning("No valid tactics to display in heatmap")
@@ -86,13 +156,14 @@ def generate_heatmap(tactics):
         plt.figure(figsize=(12, 6))
         sns.barplot(data=tactic_counts, x='Tactic', y='Count', palette='viridis')
         plt.xticks(rotation=45)
-        plt.title("MITRE Tactic Heatmap")
+        plt.title("MITRE Tactic Distribution")
         buf = io.BytesIO()
         plt.tight_layout()
         plt.savefig(buf, format='png')
+        buf.seek(0)
         st.image(buf)
     except Exception as e:
-        st.error(f"Error generating heatmap: {e}")
+        st.error(f"Error generating traditional heatmap: {e}")
 
 # Streamlit UI
 def main():
@@ -105,7 +176,7 @@ def main():
         return
 
     # Load MITRE data
-    mitre_techniques = load_mitre_data()
+    mitre_techniques, tactic_mapping = load_mitre_data()
     if not mitre_techniques:
         st.error("Failed to load MITRE ATT&CK data. Please check your internet connection.")
         return
@@ -136,14 +207,24 @@ def main():
                 st.error("Your CSV must contain a 'Description' column. Please check your file.")
                 return
             
-            tactics, techniques, references = [], [], []
+            tactics, techniques, references, all_tactics_lists = [], [], [], []
+            techniques_count = {}  # For Navigator layer
 
             with st.spinner("Mapping use cases to MITRE ATT&CK..."):
                 for _, row in df.iterrows():
-                    tactic, technique, reference = map_to_mitre(row[required_col], model, mitre_techniques, mitre_embeddings)
+                    tactic, technique, reference, tactics_list = map_to_mitre(row[required_col], model, mitre_techniques, mitre_embeddings)
                     tactics.append(tactic)
                     techniques.append(technique)
                     references.append(reference)
+                    all_tactics_lists.append(tactics_list)
+                    
+                    # Extract technique ID for navigator
+                    if '-' in technique:
+                        tech_id = technique.split('-')[0].strip()
+                        if tech_id in techniques_count:
+                            techniques_count[tech_id] += 1
+                        else:
+                            techniques_count[tech_id] = 1
 
             df['Mapped MITRE Tactic(s)'] = tactics
             df['Mapped MITRE Technique(s)/Sub-techniques'] = techniques
@@ -156,8 +237,33 @@ def main():
             st.download_button("Download Results as CSV", csv, "mitre_mapped_output.csv", "text/csv")
 
             st.markdown("---")
-            st.subheader("MITRE Tactic Heatmap")
-            generate_heatmap(tactics)
+            st.subheader("MITRE ATT&CK Navigator Layer")
+            
+            # Create Navigator layer
+            navigator_layer = create_navigator_layer(techniques_count, tactic_mapping)
+            
+            # Create download link for the layer file
+            b64 = base64.b64encode(navigator_layer.encode()).decode()
+            href = f'<a href="data:application/json;base64,{b64}" download="navigator_layer.json">Download Navigator Layer File</a>'
+            st.markdown(href, unsafe_allow_html=True)
+            
+            # Display instructions
+            st.markdown("""
+            ### Instructions to view in MITRE ATT&CK Navigator:
+            
+            1. Download the Navigator Layer file using the link above
+            2. Visit [MITRE ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/)
+            3. Click on "Open Existing Layer" and upload the downloaded file
+            """)
+            
+            # Show sample of the JSON (collapsible)
+            with st.expander("Preview Navigator Layer JSON"):
+                st.code(navigator_layer, language="json")
+            
+            # Traditional visualization as backup
+            st.markdown("---")
+            st.subheader("MITRE Tactic Distribution (Traditional View)")
+            generate_traditional_heatmap(tactics)
             
         except Exception as e:
             st.error(f"An error occurred while processing the CSV: {str(e)}")

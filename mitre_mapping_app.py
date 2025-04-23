@@ -6,6 +6,7 @@ import torch
 import json
 import datetime
 import base64
+import uuid
 
 st.set_page_config(layout="wide")
 
@@ -26,6 +27,7 @@ def load_model():
 @st.cache_data
 def load_mitre_data():
     try:
+        # Using the Enterprise ATT&CK STIX data
         response = requests.get("https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack.json")
         attack_data = response.json()
         techniques = []
@@ -40,8 +42,14 @@ def load_mitre_data():
 
         for obj in attack_data['objects']:
             if obj.get('type') == 'attack-pattern':
+                tech_id = obj.get('external_references', [{}])[0].get('external_id', 'N/A')
+                
+                # Skip sub-techniques for proper mapping in Navigator
+                if '.' in tech_id:
+                    continue
+                    
                 techniques.append({
-                    'id': obj.get('external_references', [{}])[0].get('external_id', 'N/A'),
+                    'id': tech_id,
                     'name': obj.get('name', 'N/A'),
                     'description': obj.get('description', ''),
                     'tactic': ', '.join([phase['phase_name'] for phase in obj.get('kill_chain_phases', [])]),
@@ -82,25 +90,31 @@ def map_to_mitre(description, model, mitre_techniques, mitre_embeddings):
         return "Error", "Error", "Error", []
 
 # Create Navigator Layer
-def create_navigator_layer(techniques_count, tactic_mapping):
+def create_navigator_layer(techniques_count):
     try:
-        # Initialize all techniques with score 0
-        techniques_data = {}
+        # Initialize techniques data with proper format for Navigator
+        techniques_data = []
+        
         for tech_id, count in techniques_count.items():
-            techniques_data[tech_id] = {
+            techniques_data.append({
+                "techniqueID": tech_id,
                 "score": count,
+                "color": "",
+                "comment": f"Count: {count}",
                 "enabled": True,
                 "metadata": [],
                 "links": [],
                 "showSubtechniques": False
-            }
+            })
         
-        # Create layer file structure
+        # Create layer file structure with updated ATT&CK version
         current_date = datetime.datetime.now().strftime("%Y-%m-%d")
+        layer_id = str(uuid.uuid4())
+        
         layer = {
             "name": f"Security Use Cases Mapping - {current_date}",
             "versions": {
-                "attack": "13",
+                "attack": "17",  # Updated to v17
                 "navigator": "4.8.1",
                 "layer": "4.4"
             },
@@ -119,7 +133,7 @@ def create_navigator_layer(techniques_count, tactic_mapping):
                 "countUnscored": False
             },
             "hideDisabled": False,
-            "techniques": techniques_data,
+            "techniques": techniques_data,  # Using array format instead of object
             "gradient": {
                 "colors": ["#ffffff", "#66b1ff", "#0d4a90"],
                 "minValue": 0,
@@ -134,10 +148,10 @@ def create_navigator_layer(techniques_count, tactic_mapping):
             "selectSubtechniquesWithParent": False
         }
         
-        return json.dumps(layer, indent=2)
+        return json.dumps(layer, indent=2), layer_id
     except Exception as e:
         st.error(f"Error creating Navigator layer: {e}")
-        return "{}"
+        return "{}", ""
 
 # Streamlit UI
 def main():
@@ -214,25 +228,41 @@ def main():
             st.subheader("MITRE ATT&CK Navigator Layer")
             
             # Create Navigator layer
-            navigator_layer = create_navigator_layer(techniques_count, tactic_mapping)
+            navigator_layer, layer_id = create_navigator_layer(techniques_count)
             
-            # Create download link for the layer file
-            b64 = base64.b64encode(navigator_layer.encode()).decode()
-            href = f'<a href="data:application/json;base64,{b64}" download="navigator_layer.json">Download Navigator Layer File</a>'
-            st.markdown(href, unsafe_allow_html=True)
+            col1, col2 = st.columns(2)
             
-            # Display instructions
-            st.markdown("""
-            ### Instructions to view in MITRE ATT&CK Navigator:
+            # Option 1: Download as file
+            with col1:
+                st.markdown("### Option 1: Download and Load File")
+                b64 = base64.b64encode(navigator_layer.encode()).decode()
+                href = f'<a href="data:application/json;base64,{b64}" download="navigator_layer.json">Download Navigator Layer File</a>'
+                st.markdown(href, unsafe_allow_html=True)
+                st.markdown("Then upload file to [ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/)")
             
-            1. Download the Navigator Layer file using the link above
-            2. Visit [MITRE ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/)
-            3. Click on "Open Existing Layer" and upload the downloaded file
-            """)
+            # Option 2: Direct URL loading (this would require server storage but we simulate it here)
+            with col2:
+                st.markdown("### Option 2: Use Direct URL")
+                st.markdown("""
+                1. Copy this JSON code
+                2. Go to [MITRE ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/)
+                3. Click "Load from URL"
+                4. Paste into a JSON hosting service or GitHub Gist and use that URL
+                """)
             
-            # Show sample of the JSON (collapsible)
-            with st.expander("Preview Navigator Layer JSON"):
+            # Show the JSON for those who want to use it directly
+            with st.expander("View Navigator Layer JSON"):
                 st.code(navigator_layer, language="json")
+            
+            # Display screenshot of expected Navigator view
+            st.markdown("---")
+            st.subheader("Expected Navigator View")
+            st.markdown("""
+            After uploading to the Navigator, you should see a heatmap similar to this:
+            - The more frequently a technique appears in your mappings, the darker its color
+            - You can click on techniques to see more details
+            - The Navigator allows you to filter, search, and customize your view
+            """)
             
         except Exception as e:
             st.error(f"An error occurred while processing the CSV: {str(e)}")

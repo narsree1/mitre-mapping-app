@@ -8,6 +8,7 @@ import datetime
 import base64
 import uuid
 import plotly.graph_objects as go
+import html
 
 st.set_page_config(layout="wide")
 
@@ -30,18 +31,30 @@ def load_mitre_data():
         attack_data = response.json()
         techniques = []
         tactic_mapping = {}
+        tactics_list = []
 
+        # Extract tactics first to build the mapping and ordered list
         for obj in attack_data['objects']:
             if obj.get('type') == 'x-mitre-tactic':
                 tactic_id = obj.get('external_references', [{}])[0].get('external_id', 'N/A')
                 tactic_name = obj.get('name', 'N/A')
                 tactic_mapping[tactic_name] = tactic_id
+                # Store tactics with their order in the kill chain
+                order = obj.get('x_mitre_shortname', '')
+                tactics_list.append({
+                    'id': tactic_id, 
+                    'name': tactic_name,
+                    'shortname': order
+                })
+        
+        # Sort tactics by their kill chain order
+        tactics_list = sorted(tactics_list, key=lambda x: x['shortname'])
 
         for obj in attack_data['objects']:
             if obj.get('type') == 'attack-pattern':
                 tech_id = obj.get('external_references', [{}])[0].get('external_id', 'N/A')
                 if '.' in tech_id:
-                    continue
+                    continue  # Skip sub-techniques for simplified view
                 techniques.append({
                     'id': tech_id,
                     'name': obj.get('name', 'N/A'),
@@ -50,10 +63,10 @@ def load_mitre_data():
                     'tactics_list': [phase['phase_name'] for phase in obj.get('kill_chain_phases', [])],
                     'url': obj.get('external_references', [{}])[0].get('url', '')
                 })
-        return techniques, tactic_mapping
+        return techniques, tactic_mapping, tactics_list
     except Exception as e:
         st.error(f"Error loading MITRE data: {e}")
-        return [], {}
+        return [], {}, []
 
 @st.cache_resource
 def get_mitre_embeddings(_model, techniques):
@@ -136,12 +149,145 @@ def create_navigator_layer(techniques_count):
         st.error(f"Error creating Navigator layer: {e}")
         return "{}", ""
 
+def render_mitre_heatmap(techniques_count, tactics_list, mitre_techniques):
+    """Create an HTML heatmap visualization similar to MITRE ATT&CK Navigator"""
+    
+    # Create a mapping of technique ID to techniques
+    tech_map = {tech['id']: tech for tech in mitre_techniques}
+    
+    # Create color scale function
+    def get_color(count, max_count):
+        if count == 0:
+            return "#ffffff"  # White for zero
+        elif count < max_count * 0.33:
+            return "#66b1ff"  # Light blue for low
+        elif count < max_count * 0.66:
+            return "#3377cc"  # Medium blue
+        else:
+            return "#0d4a90"  # Dark blue for high
+    
+    max_count = max(techniques_count.values()) if techniques_count else 1
+    
+    # Start building the HTML for the heatmap
+    html_content = """
+    <style>
+        .mitre-heatmap {
+            width: 100%;
+            font-family: Arial, sans-serif;
+            border-collapse: collapse;
+        }
+        .mitre-tactic {
+            background-color: #dddddd;
+            padding: 10px;
+            font-weight: bold;
+            text-align: center;
+            border: 1px solid #aaa;
+        }
+        .mitre-techniques {
+            display: flex;
+            flex-wrap: wrap;
+            padding: 5px;
+            border: 1px solid #aaa;
+        }
+        .technique-box {
+            margin: 3px;
+            padding: 5px;
+            border-radius: 3px;
+            border: 1px solid #888;
+            text-align: center;
+            width: 110px;
+            height: 75px;
+            font-size: 12px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+        }
+        .technique-id {
+            font-weight: bold;
+        }
+        .technique-count {
+            position: absolute;
+            top: 2px;
+            right: 5px;
+            font-weight: bold;
+        }
+        .color-legend {
+            display: flex;
+            margin-top: 20px;
+            justify-content: center;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 0 10px;
+        }
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            margin-right: 5px;
+            border: 1px solid #888;
+        }
+    </style>
+    <table class="mitre-heatmap">
+    """
+    
+    # Add rows for each tactic
+    for tactic in tactics_list:
+        tactic_name = tactic['name']
+        html_content += f'<tr><td class="mitre-tactic">{tactic_name}</td>'
+        html_content += '<td class="mitre-techniques">'
+        
+        # Find all techniques for this tactic
+        for tech in mitre_techniques:
+            if tactic_name in tech['tactics_list']:
+                tech_id = tech['id']
+                count = techniques_count.get(tech_id, 0)
+                color = get_color(count, max_count)
+                
+                # Create a technique box
+                html_content += f"""
+                <div class="technique-box" style="background-color: {color};">
+                    <div class="technique-id">{tech_id}</div>
+                    <div>{html.escape(tech['name'])}</div>
+                    {f'<div class="technique-count">{count}</div>' if count > 0 else ''}
+                </div>
+                """
+        
+        html_content += '</td></tr>'
+    
+    # Add a color legend
+    html_content += """
+    </table>
+    <div class="color-legend">
+        <div class="legend-item">
+            <div class="legend-color" style="background-color: #ffffff;"></div>
+            <div>Not covered</div>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background-color: #66b1ff;"></div>
+            <div>Low coverage</div>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background-color: #3377cc;"></div>
+            <div>Medium coverage</div>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background-color: #0d4a90;"></div>
+            <div>High coverage</div>
+        </div>
+    </div>
+    """
+    
+    return html_content
+
 def main():
     st.title("MITRE ATT&CK Mapping Tool for Security Use Cases")
     model = load_model()
     if model is None:
         return
-    mitre_techniques, tactic_mapping = load_mitre_data()
+    mitre_techniques, tactic_mapping, tactics_list = load_mitre_data()
     if not mitre_techniques:
         return
     mitre_embeddings = get_mitre_embeddings(model, mitre_techniques)
@@ -204,24 +350,25 @@ def main():
             st.markdown("---")
             st.subheader("MITRE ATT&CK Navigator Layer")
 
+            # New feature: In-app MITRE ATT&CK Heat Map visualization
+            st.markdown("### MITRE ATT&CK Heat Map")
+            
+            # Create the HTML for the heat map visualization
+            heat_map_html = render_mitre_heatmap(techniques_count, tactics_list, mitre_techniques)
+            
+            # Display the visualization in the app
+            st.components.v1.html(heat_map_html, height=800, scrolling=True)
+            
+            # Still provide the option to download the layer for external use
             navigator_layer, layer_id = create_navigator_layer(techniques_count)
             
-            # Provide direct download for navigator layer JSON
+            st.markdown("### Download Navigator Layer")
             st.download_button(
                 label="Download Navigator Layer JSON",
                 data=navigator_layer,
                 file_name="navigator_layer.json",
                 mime="application/json"
             )
-
-            st.markdown("### How to View in MITRE ATT&CK Navigator")
-            st.markdown("""
-            **Steps: Upload the downloaded file**
-            1. Download the Navigator Layer JSON using the button above
-            2. Visit the [MITRE ATT&CK Navigator](https://mitre-attack.github.io/attack-navigator/)
-            3. Click "Open Existing Layer" and then "Upload from Local"
-            4. Select the downloaded `navigator_layer.json` file
-            """)
             
             with st.expander("View Layer JSON"):
                 st.code(navigator_layer, language="json")

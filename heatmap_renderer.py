@@ -1,149 +1,191 @@
 # heatmap_renderer.py
-# Save this as a separate file in your project directory
-
 import streamlit as st
+import requests
 import json
 import html
-import requests
+from collections import defaultdict
 
-def load_mitre_tactics():
-    """Load MITRE tactics data for the heatmap"""
+@st.cache_data
+def load_mitre_data():
+    """Load MITRE ATT&CK data for the matrix visualization"""
     try:
         response = requests.get("https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack.json")
         attack_data = response.json()
-        tactics_list = []
-
-        # Extract tactics first to build the ordered list
+        
+        # Process tactics to maintain the correct order
+        tactics = []
+        tactics_by_shortname = {}
+        
         for obj in attack_data['objects']:
             if obj.get('type') == 'x-mitre-tactic':
+                shortname = obj.get('x_mitre_shortname', '')
                 tactic_id = obj.get('external_references', [{}])[0].get('external_id', 'N/A')
                 tactic_name = obj.get('name', 'N/A')
-                # Store tactics with their order in the kill chain
-                order = obj.get('x_mitre_shortname', '')
-                tactics_list.append({
-                    'id': tactic_id, 
+                
+                tactic_data = {
+                    'id': tactic_id,
                     'name': tactic_name,
-                    'shortname': order
-                })
+                    'shortname': shortname
+                }
+                
+                tactics.append(tactic_data)
+                tactics_by_shortname[shortname] = tactic_data
         
-        # Sort tactics by their kill chain order
-        tactics_list = sorted(tactics_list, key=lambda x: x['shortname'])
-        return tactics_list
-    except Exception as e:
-        st.error(f"Error loading MITRE tactics data: {e}")
-        return []
-
-def load_techniques_by_tactic():
-    """Get a mapping of techniques by tactic"""
-    try:
-        response = requests.get("https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack.json")
-        attack_data = response.json()
+        # Define the standard MITRE ATT&CK kill chain order
+        kill_chain_order = [
+            "reconnaissance", "resource-development", "initial-access", 
+            "execution", "persistence", "privilege-escalation", "defense-evasion",
+            "credential-access", "discovery", "lateral-movement", "collection",
+            "command-and-control", "exfiltration", "impact"
+        ]
         
-        techniques_by_tactic = {}
-        techniques_list = []
+        # Sort tactics according to the kill chain
+        sorted_tactics = []
+        for phase in kill_chain_order:
+            if phase in tactics_by_shortname:
+                sorted_tactics.append(tactics_by_shortname[phase])
         
-        # First collect all techniques
+        # Process techniques
+        techniques_by_tactic = defaultdict(list)
+        all_techniques = []
+        
         for obj in attack_data['objects']:
             if obj.get('type') == 'attack-pattern':
                 tech_id = obj.get('external_references', [{}])[0].get('external_id', 'N/A')
-                if '.' in tech_id:
-                    continue  # Skip sub-techniques for simplified view
-                    
+                if '.' in tech_id:  # Skip sub-techniques for now
+                    continue
+                
+                tech_name = obj.get('name', 'N/A')
+                tech_desc = obj.get('description', '')
+                
                 technique = {
                     'id': tech_id,
-                    'name': obj.get('name', 'N/A'),
-                    'tactics_list': [phase['phase_name'] for phase in obj.get('kill_chain_phases', [])]
+                    'name': tech_name,
+                    'description': tech_desc,
+                    'tactics': []
                 }
-                techniques_list.append(technique)
                 
-                # Add to techniques by tactic mapping
-                for tactic_name in technique['tactics_list']:
-                    if tactic_name not in techniques_by_tactic:
-                        techniques_by_tactic[tactic_name] = []
-                    techniques_by_tactic[tactic_name].append(technique)
+                # Get all tactics this technique belongs to
+                for phase in obj.get('kill_chain_phases', []):
+                    phase_name = phase.get('phase_name', '')
+                    technique['tactics'].append(phase_name)
+                    
+                    # Add to the techniques by tactic mapping
+                    for tactic in sorted_tactics:
+                        if phase_name == tactic['name']:
+                            techniques_by_tactic[tactic['id']].append(technique)
+                
+                all_techniques.append(technique)
         
-        return techniques_by_tactic, techniques_list
+        return sorted_tactics, techniques_by_tactic, all_techniques
+    
     except Exception as e:
-        st.error(f"Error loading MITRE techniques data: {e}")
-        return {}, []
+        st.error(f"Error loading MITRE data: {e}")
+        return [], {}, []
 
-def render_mitre_heatmap(techniques_count):
-    """Create an HTML heatmap visualization similar to MITRE ATT&CK Navigator"""
+def get_severity_color(count, max_count):
+    """Get the appropriate color for a technique based on its count/score"""
+    if count == 0:
+        return "#ffffff"  # White for no coverage
     
-    tactics_list = load_mitre_tactics()
-    techniques_by_tactic, all_techniques = load_techniques_by_tactic()
+    # Create a color scale based on the image shared (red, orange, yellow, green)
+    if count >= max_count * 0.8:
+        return "#ff6666"  # Red - Highest severity/count
+    elif count >= max_count * 0.6:
+        return "#ffb366"  # Orange - High severity/count
+    elif count >= max_count * 0.4:
+        return "#ffcc66"  # Yellow-Orange - Medium severity/count
+    elif count >= max_count * 0.2:
+        return "#adebad"  # Light Green - Low severity/count
+    else:
+        return "#d6f5d6"  # Very Light Green - Very Low severity/count
+
+def render_attack_matrix(techniques_count):
+    """Create an HTML visualization matching the MITRE ATT&CK Navigator style"""
+    # Load MITRE ATT&CK data
+    sorted_tactics, techniques_by_tactic, all_techniques = load_mitre_data()
     
-    # Mapping of technique IDs to the complete technique object
-    tech_map = {tech['id']: tech for tech in all_techniques}
+    if not sorted_tactics:
+        return "<div>Error loading MITRE ATT&CK data</div>"
     
-    # Create color scale function
-    def get_color(count, max_count):
-        if count == 0:
-            return "#ffffff"  # White for zero
-        elif count < max_count * 0.33:
-            return "#66b1ff"  # Light blue for low
-        elif count < max_count * 0.66:
-            return "#3377cc"  # Medium blue
-        else:
-            return "#0d4a90"  # Dark blue for high
-    
+    # Create mapping of technique IDs to their count
     max_count = max(techniques_count.values()) if techniques_count else 1
     
-    # Start building the HTML for the heatmap
+    # Start building the HTML for the matrix
     html_content = """
     <style>
-        .mitre-heatmap {
+        .attack-matrix {
+            display: table;
             width: 100%;
-            font-family: Arial, sans-serif;
             border-collapse: collapse;
+            font-family: Arial, sans-serif;
         }
-        .mitre-tactic {
+        .tactic-row {
+            display: table-row;
+            border-bottom: 1px solid #ccc;
+        }
+        .tactic-header {
+            display: table-cell;
+            width: 150px;
             background-color: #dddddd;
             padding: 10px;
             font-weight: bold;
             text-align: center;
+            vertical-align: middle;
             border: 1px solid #aaa;
-            width: 150px;
         }
-        .mitre-techniques {
-            display: flex;
-            flex-wrap: wrap;
+        .techniques-container {
+            display: table-cell;
             padding: 5px;
             border: 1px solid #aaa;
         }
-        .technique-box {
-            margin: 3px;
-            padding: 5px;
-            border-radius: 3px;
-            border: 1px solid #888;
-            text-align: center;
+        .technique-cell {
+            display: inline-block;
             width: 110px;
-            height: 75px;
-            font-size: 12px;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            overflow: hidden;
+            height: 70px;
+            margin: 4px;
+            padding: 5px;
+            border: 1px solid #888;
+            border-radius: 3px;
             position: relative;
+            vertical-align: top;
+            overflow: hidden;
+            font-size: 11px;
         }
         .technique-id {
             font-weight: bold;
+            font-size: 12px;
+        }
+        .technique-name {
+            font-size: 11px;
+            line-height: 1.2;
+            margin-top: 2px;
         }
         .technique-count {
             position: absolute;
-            top: 2px;
+            top: 3px;
             right: 5px;
+            background-color: white;
+            border-radius: 9px;
+            min-width: 18px;
+            height: 18px;
+            font-size: 11px;
+            text-align: center;
+            line-height: 18px;
             font-weight: bold;
+            padding: 0 4px;
+            box-sizing: border-box;
         }
         .color-legend {
             display: flex;
             margin-top: 20px;
             justify-content: center;
+            flex-wrap: wrap;
         }
         .legend-item {
             display: flex;
             align-items: center;
-            margin: 0 10px;
+            margin: 5px 10px;
         }
         .legend-color {
             width: 20px;
@@ -151,60 +193,78 @@ def render_mitre_heatmap(techniques_count):
             margin-right: 5px;
             border: 1px solid #888;
         }
+        .matrix-header {
+            font-weight: bold;
+            font-size: 16px;
+            margin-bottom: 10px;
+            text-align: center;
+        }
     </style>
-    <table class="mitre-heatmap">
+    <div class="matrix-header">MITRE ATT&CK Heat Map</div>
+    <div class="attack-matrix">
     """
     
     # Add rows for each tactic
-    for tactic in tactics_list:
+    for tactic in sorted_tactics:
+        tactic_id = tactic['id']
         tactic_name = tactic['name']
-        html_content += f'<tr><td class="mitre-tactic">{tactic_name}</td>'
-        html_content += '<td class="mitre-techniques">'
         
-        # Find all techniques for this tactic
-        if tactic_name in techniques_by_tactic:
-            for tech in techniques_by_tactic[tactic_name]:
-                tech_id = tech['id']
-                count = techniques_count.get(tech_id, 0)
-                color = get_color(count, max_count)
-                
-                # Create a technique box
-                html_content += f"""
-                <div class="technique-box" style="background-color: {color};">
-                    <div class="technique-id">{tech_id}</div>
-                    <div>{html.escape(tech['name'])}</div>
-                    {f'<div class="technique-count">{count}</div>' if count > 0 else ''}
-                </div>
-                """
+        html_content += f'<div class="tactic-row">'
+        html_content += f'<div class="tactic-header">{tactic_name}</div>'
+        html_content += '<div class="techniques-container">'
         
-        html_content += '</td></tr>'
+        # Add techniques for this tactic
+        tech_list = techniques_by_tactic.get(tactic_id, [])
+        for tech in tech_list:
+            tech_id = tech['id']
+            tech_name = tech['name']
+            count = techniques_count.get(tech_id, 0)
+            color = get_severity_color(count, max_count)
+            
+            html_content += f"""
+            <div class="technique-cell" style="background-color: {color};">
+                <div class="technique-id">{tech_id}</div>
+                <div class="technique-name">{html.escape(tech_name)}</div>
+                {f'<div class="technique-count">{count}</div>' if count > 0 else ''}
+            </div>
+            """
+        
+        html_content += '</div></div>'
     
     # Add a color legend
     html_content += """
-    </table>
+    </div>
     <div class="color-legend">
         <div class="legend-item">
             <div class="legend-color" style="background-color: #ffffff;"></div>
-            <div>Not covered</div>
+            <div>No Coverage</div>
         </div>
         <div class="legend-item">
-            <div class="legend-color" style="background-color: #66b1ff;"></div>
-            <div>Low coverage</div>
+            <div class="legend-color" style="background-color: #d6f5d6;"></div>
+            <div>Very Low</div>
         </div>
         <div class="legend-item">
-            <div class="legend-color" style="background-color: #3377cc;"></div>
-            <div>Medium coverage</div>
+            <div class="legend-color" style="background-color: #adebad;"></div>
+            <div>Low</div>
         </div>
         <div class="legend-item">
-            <div class="legend-color" style="background-color: #0d4a90;"></div>
-            <div>High coverage</div>
+            <div class="legend-color" style="background-color: #ffcc66;"></div>
+            <div>Medium</div>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background-color: #ffb366;"></div>
+            <div>High</div>
+        </div>
+        <div class="legend-item">
+            <div class="legend-color" style="background-color: #ff6666;"></div>
+            <div>Very High</div>
         </div>
     </div>
     """
     
     return html_content
 
-def display_heatmap(techniques_count):
-    """Display the MITRE ATT&CK heat map"""
-    heat_map_html = render_mitre_heatmap(techniques_count)
-    st.components.v1.html(heat_map_html, height=800, scrolling=True)
+def display_attack_matrix(techniques_count):
+    """Display the MITRE ATT&CK matrix in Streamlit"""
+    matrix_html = render_attack_matrix(techniques_count)
+    st.components.v1.html(matrix_html, height=900, scrolling=True)

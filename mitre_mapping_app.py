@@ -9,6 +9,10 @@ import base64
 import uuid
 import plotly.graph_objects as go
 import html
+import os
+
+# Fix for PyTorch and Streamlit compatibility issue
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 
 st.set_page_config(layout="wide")
 

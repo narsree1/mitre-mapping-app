@@ -2,6 +2,7 @@ import pandas as pd
 import streamlit as st
 import requests
 from sentence_transformers import SentenceTransformer, util
+from heatmap_renderer import display_heatmap
 import torch
 import json
 import datetime
@@ -358,14 +359,9 @@ def main():
             st.markdown("---")
             st.subheader("MITRE ATT&CK Navigator Layer")
 
-            # New feature: In-app MITRE ATT&CK Heat Map visualization
+            # NEW CODE: Use the standalone heat map renderer
             st.markdown("### MITRE ATT&CK Heat Map")
-            
-            # Create the HTML for the heat map visualization
-            heat_map_html = render_mitre_heatmap(techniques_count, tactics_list, mitre_techniques)
-            
-            # Display the visualization in the app
-            st.components.v1.html(heat_map_html, height=800, scrolling=True)
+            display_heatmap(techniques_count)  # This will render the heat map without PyTorch dependencies
             
             # Still provide the option to download the layer for external use
             navigator_layer, layer_id = create_navigator_layer(techniques_count)

@@ -10,10 +10,14 @@ import uuid
 import plotly.graph_objects as go
 import html
 import os
+import sys
 
-# Fix for PyTorch and Streamlit compatibility issue
-os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
+# Add a command line flag to disable file watcher
+# You would run this script with: streamlit run app.py -- --server.fileWatcherType none
+if "--server.fileWatcherType" not in sys.argv:
+    sys.argv.extend(["--", "--server.fileWatcherType", "none"])
 
+# Set the page configuration
 st.set_page_config(layout="wide")
 
 # Load embedding model with error handling

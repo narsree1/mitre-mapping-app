@@ -2,7 +2,7 @@ import pandas as pd
 import streamlit as st
 import requests
 from sentence_transformers import SentenceTransformer, util
-from heatmap_renderer import display_heatmap
+from heatmap_renderer import display_attack_matrix
 import torch
 import json
 import datetime
@@ -359,9 +359,9 @@ def main():
             st.markdown("---")
             st.subheader("MITRE ATT&CK Navigator Layer")
 
-            # NEW CODE: Use the standalone heat map renderer
-            st.markdown("### MITRE ATT&CK Heat Map")
-            display_heatmap(techniques_count)  # This will render the heat map without PyTorch dependencies
+            # NEW: Display the MITRE ATT&CK Matrix visualization
+            st.markdown("### MITRE ATT&CK Matrix Visualization")
+            display_attack_matrix(techniques_count)
             
             # Still provide the option to download the layer for external use
             navigator_layer, layer_id = create_navigator_layer(techniques_count)
